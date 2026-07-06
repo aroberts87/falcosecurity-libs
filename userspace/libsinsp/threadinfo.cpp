@@ -41,9 +41,13 @@ sinsp_threadinfo::sinsp_threadinfo(const std::shared_ptr<ctor_params>& params):
         m_params{params},
         m_fdtable{params->fdtable_factory.create()},
         m_main_fdtable(&m_fdtable),
-        m_args_table_adapter("args", m_args),
-        m_env_table_adapter("env", m_env),
-        m_cgroups_table_adapter("cgroups", m_cgroups) {
+        // The lambdas below capture `this` and are safe because each adapter is a member of
+        // this same sinsp_threadinfo, so both share its lifetime. args/env resolve lazily to
+        // the (possibly changing) thread-group leader's storage via args_table_storage()/
+        // env_table_storage(); cgroups stays per-thread, resolving to this->m_cgroups.
+        m_args_table_adapter("args", [this]() -> decltype(m_args)& { return args_table_storage(); }),
+        m_env_table_adapter("env", [this]() -> decltype(m_env)& { return env_table_storage(); }),
+        m_cgroups_table_adapter("cgroups", [this]() -> decltype(m_cgroups)& { return m_cgroups; }) {
 	init();
 }
 
@@ -358,8 +362,11 @@ void sinsp_threadinfo::init(const scap_threadinfo& pinfo, const bool can_load_en
 	m_reaper_tid = -1;
 	m_not_expired_children = 0;
 
-	set_args(pinfo.args, pinfo.args_len);
 	if(is_main_thread()) {
+		// Args are process-level; all threads of a process share the leader's argv. Only the
+		// thread-group leader stores them (mirrors the set_env() handling just below), avoiding a
+		// redundant argv copy on every non-leader thread. Readers resolve via get_args().
+		set_args(pinfo.args, pinfo.args_len);
 		set_env(pinfo.env, pinfo.env_len, can_load_env_from_proc);
 		update_cwd({pinfo.cwd});
 	}
@@ -485,18 +492,35 @@ bool sinsp_threadinfo::set_env_from_proc() {
 }
 
 const std::vector<std::string>& sinsp_threadinfo::get_env() {
+	return env_table_storage();
+}
+
+const std::vector<std::string>& sinsp_threadinfo::get_args() const {
+	return const_cast<sinsp_threadinfo*>(this)->args_table_storage();
+}
+
+// Non-const, thread-group-leader-resolving storage accessors. These are the single source of
+// truth for "process-level" args/env: get_args()/get_env() delegate here, AND the state-table
+// adapters (m_args_table_adapter/m_env_table_adapter) resolve through here so a plugin reading
+// the "args"/"env" subtable from a non-leader thread entry sees the leader's values rather than
+// an empty vector. A non-const reference is returned because the adapter's interface is mutable
+// (the fields are registered read-only, so writes don't actually reach here). The fallback to
+// this thread's own storage covers the brief window during sinsp::scap_open() before the thread
+// group is linked (mirrors the original get_env() fallback).
+std::vector<std::string>& sinsp_threadinfo::args_table_storage() {
+	if(is_main_thread()) {
+		return m_args;
+	}
+	auto* mtinfo = get_main_thread();
+	return mtinfo != nullptr ? mtinfo->m_args : m_args;
+}
+
+std::vector<std::string>& sinsp_threadinfo::env_table_storage() {
 	if(is_main_thread()) {
 		return m_env;
-	} else {
-		auto mtinfo = get_main_thread();
-		if(mtinfo != nullptr) {
-			return mtinfo->get_env();
-		} else {
-			// it should never happen but provide a safe fallback just in case
-			// except during sinsp::scap_open() (see sinsp::get_thread()).
-			return m_env;
-		}
 	}
+	auto* mtinfo = get_main_thread();
+	return mtinfo != nullptr ? mtinfo->m_env : m_env;
 }
 
 // Return value string for the exact environment variable name given
@@ -822,7 +846,7 @@ void sinsp_threadinfo::assign_children_to_reaper(sinsp_threadinfo* reaper) {
 void sinsp_threadinfo::populate_cmdline(std::string& cmdline, const sinsp_threadinfo* tinfo) {
 	if(tinfo->m_cmd_line.empty()) {
 		cmdline = tinfo->get_comm();
-		for(const auto& arg : tinfo->m_args) {
+		for(const auto& arg : tinfo->get_args()) {
 			cmdline += " ";
 			cmdline += arg;
 		}
@@ -832,11 +856,12 @@ void sinsp_threadinfo::populate_cmdline(std::string& cmdline, const sinsp_thread
 }
 
 void sinsp_threadinfo::populate_args(std::string& args, const sinsp_threadinfo* tinfo) {
+	const auto& arglist = tinfo->get_args();
 	uint32_t j;
-	uint32_t nargs = (uint32_t)tinfo->m_args.size();
+	uint32_t nargs = (uint32_t)arglist.size();
 
 	for(j = 0; j < nargs; j++) {
-		args += tinfo->m_args[j];
+		args += arglist[j];
 		if(j < nargs - 1) {
 			args += ' ';
 		}
@@ -881,7 +906,9 @@ std::string sinsp_threadinfo::get_path_for_dir_fd(const int64_t dir_fd) {
 }
 
 size_t sinsp_threadinfo::args_len() const {
-	return strvec_len(m_args);
+	// Args are leader-only storage; resolve to the group leader (see get_args()). Reading raw
+	// m_args here would serialize an empty argv for every non-leader thread.
+	return strvec_len(get_args());
 }
 
 size_t sinsp_threadinfo::env_len() const {
@@ -889,7 +916,9 @@ size_t sinsp_threadinfo::env_len() const {
 }
 
 void sinsp_threadinfo::args_to_iovec(struct iovec** iov, int* iovcnt, std::string& rem) const {
-	return strvec_to_iovec(m_args, iov, iovcnt, rem);
+	// Args are leader-only storage; resolve to the group leader (see get_args()). Reading raw
+	// m_args here would serialize an empty argv for every non-leader thread.
+	return strvec_to_iovec(get_args(), iov, iovcnt, rem);
 }
 
 void sinsp_threadinfo::env_to_iovec(struct iovec** iov, int* iovcnt, std::string& rem) const {

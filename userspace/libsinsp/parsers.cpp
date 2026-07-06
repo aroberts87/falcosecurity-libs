@@ -363,6 +363,19 @@ static bool can_query_os_for_thread_info(const uint16_t evt_type) {
 	         is_schedswitch_event(evt_type) || is_procexit_event(evt_type));
 }
 
+// Args are process-level: all threads of a process share the leader's argv, so only the
+// thread-group leader stores them (mirrors set_env). This helper centralizes that guard for the
+// clone/fork paths and lazily decodes the args param only when the thread is the leader.
+//
+// Note: the execve path intentionally does NOT use this helper. There, set_args() runs before
+// m_pid is finalized (a secondary thread that execs becomes the new leader via a tid swap), so
+// is_main_thread() is not yet reliable and args must be set unconditionally.
+static void set_leader_args(sinsp_threadinfo* tinfo, sinsp_evt& evt) {
+	if(tinfo->is_main_thread()) {
+		tinfo->set_args(evt.get_param(2)->as<std::vector<std::string>>());
+	}
+}
+
 void sinsp_parser::set_event_source(sinsp_evt &evt) const {
 	uint32_t plugin_id = 0;
 	if(evt.get_type() == PPME_PLUGINEVENT_E || evt.get_type() == PPME_ASYNCEVENT_E) {
@@ -922,7 +935,7 @@ void sinsp_parser::parse_clone_exit_caller(sinsp_evt &evt,
 	child_tinfo->m_exe = evt.get_param(1)->as<std::string>();
 
 	/* args */
-	child_tinfo->set_args(evt.get_param(2)->as<std::vector<std::string>>());
+	set_leader_args(child_tinfo.get(), evt);
 
 	/* comm */
 	if(const auto comm_param = evt.get_param(13); !comm_param->empty()) {
@@ -1023,7 +1036,7 @@ void sinsp_parser::parse_clone_exit_caller(sinsp_evt &evt,
 		caller_tinfo->m_comm = child_tinfo->m_comm;
 
 		/* args */
-		caller_tinfo->set_args(evt.get_param(2)->as<std::vector<std::string>>());
+		set_leader_args(caller_tinfo.get(), evt);
 	}
 
 	/*=============================== CREATE CHILD ===========================*/
@@ -1228,7 +1241,7 @@ void sinsp_parser::parse_clone_exit_child(sinsp_evt &evt, sinsp_parser_verdict &
 	}
 
 	/* args */
-	child_tinfo->set_args(evt.get_param(2)->as<std::vector<std::string>>());
+	set_leader_args(child_tinfo.get(), evt);
 
 	if(valid_lookup_thread) {
 		/* Please note that these data could be wrong if the lookup thread
@@ -1334,7 +1347,9 @@ void sinsp_parser::parse_clone_exit_child(sinsp_evt &evt, sinsp_parser_verdict &
 			lookup_tinfo->m_comm = child_tinfo->m_comm;
 
 			/* args */
-			lookup_tinfo->set_args(evt.get_param(2)->as<std::vector<std::string>>());
+			// In the !is_thread_leader branch lookup_tid == child's m_pid, so lookup_tinfo is
+			// the thread-group leader and set_leader_args() always stores here.
+			set_leader_args(lookup_tinfo.get(), evt);
 		}
 	}
 
