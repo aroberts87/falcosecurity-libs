@@ -173,7 +173,11 @@ public:
 
 	stl_container_table_adapter(const std::string& name, T& container):
 	        built_in_table(name),
-	        m_container(container) {}
+	        m_container(&container) {}
+
+	// Rebind to a different container (e.g. to redirect a non-leader thread's adapter to the
+	// thread-group leader's storage after m_tginfo is established).
+	void rebind(T& container) { m_container = &container; }
 
 	void list_fields(std::vector<ss_plugin_table_fieldinfo>& out) override {
 		wrapper_t::list_fields(out);
@@ -187,9 +191,9 @@ public:
 		throw sinsp_exception("can't add dynamic fields to stl_container_table_adapter");
 	}
 
-	size_t entries_count() const override { return m_container.size(); }
+	size_t entries_count() const override { return (*m_container).size(); }
 
-	void clear_entries() override { m_container.clear(); }
+	void clear_entries() override { (*m_container).clear(); }
 
 	std::unique_ptr<libsinsp::state::table_entry> new_entry() const override {
 		auto ret = std::make_unique<wrapper_t>();
@@ -198,7 +202,7 @@ public:
 
 	bool foreach_entry(std::function<bool(libsinsp::state::table_entry& e)> pred) override {
 		wrapper_t w;
-		for(auto& v : m_container) {
+		for(auto& v : *m_container) {
 			w.set_value(&v);
 			if(!pred(w)) {
 				return false;
@@ -208,10 +212,10 @@ public:
 	}
 
 	std::shared_ptr<libsinsp::state::table_entry> get_entry(const uint64_t& key) override {
-		if(key >= m_container.size()) {
+		if(key >= (*m_container).size()) {
 			return nullptr;
 		}
-		return wrap_value(&m_container[key]);
+		return wrap_value(&(*m_container)[key]);
 	}
 
 	std::shared_ptr<libsinsp::state::table_entry> add_entry(
@@ -232,15 +236,15 @@ public:
 			                      std::string(this->name()));
 		}
 
-		m_container.resize(key + 1);
-		return wrap_value(&m_container[key]);
+		(*m_container).resize(key + 1);
+		return wrap_value(&(*m_container)[key]);
 	}
 
 	bool erase_entry(const uint64_t& key) override {
-		if(key >= m_container.size()) {
+		if(key >= (*m_container).size()) {
 			return false;
 		}
-		m_container.erase(m_container.begin() + key);
+		(*m_container).erase((*m_container).begin() + key);
 		return true;
 	}
 
@@ -264,7 +268,7 @@ private:
 		return std::shared_ptr<libsinsp::state::table_entry>(&w, wrap_deleter);
 	}
 
-	T& m_container;
+	T* m_container;
 	// deque: stable element addresses across emplace_back, and we never erase.
 	std::deque<wrapper_t> m_wrappers;
 };

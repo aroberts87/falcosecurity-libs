@@ -196,6 +196,7 @@ void sinsp_thread_manager::create_thread_dependencies(
 	for(const auto& thread : tginfo->get_thread_list()) {
 		if(auto thread_ptr = thread.lock().get(); thread_ptr != nullptr) {
 			thread_ptr->update_main_fdtable();
+			thread_ptr->update_args_env_adapters();
 		}
 	}
 	for(const auto& thread : tinfo->m_children) {

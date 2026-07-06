@@ -115,6 +115,12 @@ public:
 	const std::vector<std::string>& get_env();
 
 	/*!
+	  \brief Return the command-line arguments for the process containing this thread,
+	  resolved to the thread-group leader. Mirrors get_env().
+	*/
+	const std::vector<std::string>& get_args() const;
+
+	/*!
 	  \brief Return the value of the specified environment variable for the process
 	  containing this thread. Returns empty string if variable is not found.
 	*/
@@ -370,9 +376,8 @@ public:
 	bool m_exe_lower_layer;  ///< True if the executable file belongs to lower layer in overlayfs
 	bool m_exe_from_memfd;   ///< True if the executable is stored in fileless memory referenced by
 	                         ///< memfd
-	std::vector<std::string> m_args;  ///< Command line arguments (e.g. "-d1")
-	std::vector<std::string> m_env;   ///< Environment variables
-	cgroups_t m_cgroups;              ///< subsystem-cgroup pairs
+	std::vector<std::string> m_env;  ///< Environment variables
+	cgroups_t m_cgroups;             ///< subsystem-cgroup pairs
 	uint32_t m_flags;   ///< The thread flags. See the PPM_CL_* declarations in ppm_events_public.h.
 	int64_t m_fdlimit;  ///< The maximum number of FDs this thread can open
 	uint32_t m_uid;     ///< uid
@@ -502,6 +507,8 @@ public:
 		        !fdtable ? nullptr : static_cast<const libsinsp::state::base_table*>(fdtable);
 	}
 
+	void update_args_env_adapters();
+
 	void set_exepath(std::string&& exepath);
 
 	/*!
@@ -547,6 +554,14 @@ private:
 	uint16_t m_lastevent_cpuid;
 	sinsp_evt::category m_lastevent_category;
 	bool m_parent_loop_detected;
+
+	// Thread-group-leader-resolving storage for process-level args/env. Single source of truth
+	// shared by get_args()/get_env() and the args/env state-table adapters (see threadinfo.cpp).
+	std::vector<std::string>& args_table_storage();
+	std::vector<std::string>& env_table_storage();
+
+	std::vector<std::string>
+	        m_args;  ///< Command line arguments — leader-only, access via get_args()
 	libsinsp::state::stl_container_table_adapter<decltype(m_args)> m_args_table_adapter;
 	libsinsp::state::stl_container_table_adapter<decltype(m_env)> m_env_table_adapter;
 	libsinsp::state::stl_container_table_adapter<decltype(m_cgroups)> m_cgroups_table_adapter;

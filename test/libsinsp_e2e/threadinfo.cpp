@@ -54,10 +54,12 @@ static void run_test(test_type ttype,
 	std::string rem;
 	sinsp_threadinfo::cgroups_t cg;
 
+	if(ttype == TEST_ARGS) {
+		ti->set_args(vals);
+	}
 	for(auto& val : vals) {
 		switch(ttype) {
 		case TEST_ARGS:
-			ti->m_args.push_back(val.c_str());
 			break;
 		case TEST_ENV:
 			ti->m_env.push_back(val.c_str());

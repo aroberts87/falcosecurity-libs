@@ -922,7 +922,10 @@ void sinsp_parser::parse_clone_exit_caller(sinsp_evt &evt,
 	child_tinfo->m_exe = evt.get_param(1)->as<std::string>();
 
 	/* args */
-	child_tinfo->set_args(evt.get_param(2)->as<std::vector<std::string>>());
+	// Args are process-level; only the thread-group leader stores them (mirrors set_env).
+	if(child_tinfo->is_main_thread()) {
+		child_tinfo->set_args(evt.get_param(2)->as<std::vector<std::string>>());
+	}
 
 	/* comm */
 	if(const auto comm_param = evt.get_param(13); !comm_param->empty()) {
@@ -1023,7 +1026,10 @@ void sinsp_parser::parse_clone_exit_caller(sinsp_evt &evt,
 		caller_tinfo->m_comm = child_tinfo->m_comm;
 
 		/* args */
-		caller_tinfo->set_args(evt.get_param(2)->as<std::vector<std::string>>());
+		// Args are process-level; only the thread-group leader stores them.
+		if(caller_tinfo->is_main_thread()) {
+			caller_tinfo->set_args(evt.get_param(2)->as<std::vector<std::string>>());
+		}
 	}
 
 	/*=============================== CREATE CHILD ===========================*/
@@ -1228,7 +1234,10 @@ void sinsp_parser::parse_clone_exit_child(sinsp_evt &evt, sinsp_parser_verdict &
 	}
 
 	/* args */
-	child_tinfo->set_args(evt.get_param(2)->as<std::vector<std::string>>());
+	// Args are process-level; only the thread-group leader stores them (mirrors set_env).
+	if(child_tinfo->is_main_thread()) {
+		child_tinfo->set_args(evt.get_param(2)->as<std::vector<std::string>>());
+	}
 
 	if(valid_lookup_thread) {
 		/* Please note that these data could be wrong if the lookup thread
@@ -1334,7 +1343,11 @@ void sinsp_parser::parse_clone_exit_child(sinsp_evt &evt, sinsp_parser_verdict &
 			lookup_tinfo->m_comm = child_tinfo->m_comm;
 
 			/* args */
-			lookup_tinfo->set_args(evt.get_param(2)->as<std::vector<std::string>>());
+			// Args are process-level; only the thread-group leader stores them.
+			// (We are in the !is_thread_leader branch, so this is normally skipped.)
+			if(lookup_tinfo->is_main_thread()) {
+				lookup_tinfo->set_args(evt.get_param(2)->as<std::vector<std::string>>());
+			}
 		}
 	}
 

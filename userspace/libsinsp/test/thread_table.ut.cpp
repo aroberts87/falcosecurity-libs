@@ -515,6 +515,78 @@ TEST_F(sinsp_with_test_input, THRD_TABLE_many_threads_in_a_group) {
 	ASSERT_EQ(thread_manager->get_thread_count(), 1);
 }
 
+// Regression: process-level args/env are stored only on the thread-group leader, but plugins read
+// them through the "args"/"env" state-table subtables, which are reached from whatever thread entry
+// the event belongs to -- routinely a non-leader. The subtable adapters must resolve to the leader
+// (via get_args()/get_env()); before that fix a non-leader entry returned an empty vector.
+TEST_F(sinsp_with_test_input, THRD_TABLE_args_env_subtable_resolves_to_leader) {
+	add_default_init_thread();
+	open_inspector();
+
+	const int64_t pid = 20;            // process / leader pid
+	const int64_t leader_tid = 20;     // main thread: tid == pid
+	const int64_t secondary_tid = 21;  // secondary thread: tid != pid, same group
+
+	generate_clone_x_event(0, leader_tid, pid, INIT_TID);
+	generate_clone_x_event(0, secondary_tid, pid, INIT_TID, PPM_CL_CLONE_THREAD);
+
+	auto leader = m_inspector.m_thread_manager->get_thread(leader_tid);
+	auto secondary = m_inspector.m_thread_manager->get_thread(secondary_tid);
+	ASSERT_NE(leader, nullptr);
+	ASSERT_NE(secondary, nullptr);
+	ASSERT_TRUE(leader->is_main_thread());
+	ASSERT_FALSE(secondary->is_main_thread());
+	ASSERT_EQ(secondary->get_main_thread(), leader.get());
+
+	// Process-level args/env live only on the leader.
+	const std::vector<std::string> expected_args = {"-l", "/tmp"};
+	const std::vector<std::string> expected_env = {"PATH=/usr/bin", "HOME=/root"};
+	leader->set_args(expected_args);
+	std::string env_buf;
+	for(const auto& e : expected_env) {
+		env_buf += e;
+		env_buf.push_back('\0');
+	}
+	leader->set_env(env_buf.data(), env_buf.size(), false);
+
+	// C++ accessors already resolve from a non-leader thread (sanity).
+	EXPECT_EQ(secondary->get_args(), expected_args);
+	EXPECT_EQ(secondary->get_env(), expected_env);
+
+	// The actual regression: read the subtables via the state-table API from each thread entry.
+	auto& reg = m_inspector.get_table_registry();
+	auto table = dynamic_cast<libsinsp::state::built_in_table<int64_t>*>(
+	        reg->get_table<int64_t>("threads"));
+	ASSERT_NE(table, nullptr);
+
+	auto read_subtable = [&](const char* field_name, int64_t tid) -> std::vector<std::string> {
+		auto acc =
+		        table->get_field(field_name, SS_PLUGIN_ST_TABLE).as<libsinsp::state::base_table*>();
+		auto entry = table->get_entry(tid);
+		EXPECT_NE(entry, nullptr);
+		auto* subtable = dynamic_cast<
+		        libsinsp::state::stl_container_table_adapter<std::vector<std::string>>*>(
+		        entry->read_field(acc));
+		EXPECT_NE(subtable, nullptr);
+		auto vacc = subtable->get_field("value", SS_PLUGIN_ST_STRING).as<std::string>();
+		std::vector<std::string> out;
+		subtable->foreach_entry([&](libsinsp::state::table_entry& e) -> bool {
+			std::string v;
+			e.read_field(vacc, v);
+			out.push_back(v);
+			return true;
+		});
+		return out;
+	};
+
+	// Non-leader entry must see the leader's args/env (returned an empty vector before the fix).
+	EXPECT_EQ(read_subtable("args", secondary_tid), expected_args);
+	EXPECT_EQ(read_subtable("env", secondary_tid), expected_env);
+	// Leader entry returns the same.
+	EXPECT_EQ(read_subtable("args", leader_tid), expected_args);
+	EXPECT_EQ(read_subtable("env", leader_tid), expected_env);
+}
+
 TEST_F(sinsp_with_test_input, THRD_TABLE_add_and_remove_many_threads_in_a_group) {
 	add_default_init_thread();
 	open_inspector();
