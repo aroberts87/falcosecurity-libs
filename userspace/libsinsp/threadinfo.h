@@ -356,6 +356,10 @@ public:
 	//
 	// Core state
 	//
+	// NOTE: fields below are intentionally grouped by size/alignment (8-byte scalars and
+	// 8-byte-aligned containers first, then 4-byte uint32_t fields, then 1-byte bool fields)
+	// to avoid compiler-inserted alignment padding between them. Please preserve this
+	// grouping when adding new fields.
 	int64_t m_tid;   ///< The id of this thread
 	int64_t m_pid;   ///< The id of the process containing this thread. In single thread threads,
 	                 ///< this is equal to tid.
@@ -365,19 +369,10 @@ public:
 	std::string m_comm;     ///< Command name (e.g. "top")
 	std::string m_exe;      ///< argv[0] (e.g. "sshd: user@pts/4")
 	std::string m_exepath;  ///< full executable path
-	bool m_exe_writable;
-	bool m_exe_upper_layer;  ///< True if the executable file belongs to upper layer in overlayfs
-	bool m_exe_lower_layer;  ///< True if the executable file belongs to lower layer in overlayfs
-	bool m_exe_from_memfd;   ///< True if the executable is stored in fileless memory referenced by
-	                         ///< memfd
 	std::vector<std::string> m_args;  ///< Command line arguments (e.g. "-d1")
 	std::vector<std::string> m_env;   ///< Environment variables
 	cgroups_t m_cgroups;              ///< subsystem-cgroup pairs
-	uint32_t m_flags;   ///< The thread flags. See the PPM_CL_* declarations in ppm_events_public.h.
 	int64_t m_fdlimit;  ///< The maximum number of FDs this thread can open
-	uint32_t m_uid;     ///< uid
-	uint32_t m_gid;     ///< gid
-	uint32_t m_loginuid;         ///< loginuid
 	uint64_t m_cap_permitted;    ///< permitted capabilities
 	uint64_t m_cap_effective;    ///< effective capabilities
 	uint64_t m_cap_inheritable;  ///< inheritable capabilities
@@ -389,9 +384,6 @@ public:
 	uint64_t m_exe_ino_ctime_duration_pidns_start;  ///< duration in ns between pidns start ts and
 	                                                ///< executable inode ctime (last status change
 	                                                ///< time) if pidns start predates ctime
-	uint32_t m_vmsize_kb;                           ///< total virtual memory (as kb).
-	uint32_t m_vmrss_kb;                            ///< resident non-swapped memory (as kb).
-	uint32_t m_vmswap_kb;                           ///< swapped memory (as kb).
 	uint64_t m_pfmajor;                             ///< number of major page faults since start.
 	uint64_t m_pfminor;                             ///< number of minor page faults since start.
 	int64_t m_vtid;                                 ///< The virtual id of this thread.
@@ -401,14 +393,10 @@ public:
 	int64_t m_pgid;   // Process group id, as seen from the host pid namespace
 	uint64_t m_pidns_init_start_ts;  ///< The pid_namespace init task (child_reaper) start_time ts.
 	std::string m_root;
-
-	uint32_t m_tty;  ///< Number of controlling terminal
 	std::shared_ptr<thread_group_info> m_tginfo;
 	std::list<std::weak_ptr<sinsp_threadinfo>> m_children;
 	uint64_t m_not_expired_children;
 	std::string m_cmd_line;
-	bool m_filtered_out;  ///< True if this thread is filtered out by the inspector filter from
-	                      ///< saving to a capture
 
 	//
 	// State for multi-event processing
@@ -420,6 +408,23 @@ public:
 	                           ///< the table.
 	uint64_t m_clone_ts;       ///< When the clone that started this process happened.
 	uint64_t m_lastexec_ts;    ///< The last time exec was called
+
+	uint32_t m_flags;   ///< The thread flags. See the PPM_CL_* declarations in ppm_events_public.h.
+	uint32_t m_uid;     ///< uid
+	uint32_t m_gid;     ///< gid
+	uint32_t m_loginuid;         ///< loginuid
+	uint32_t m_vmsize_kb;                           ///< total virtual memory (as kb).
+	uint32_t m_vmrss_kb;                            ///< resident non-swapped memory (as kb).
+	uint32_t m_vmswap_kb;                           ///< swapped memory (as kb).
+	uint32_t m_tty;  ///< Number of controlling terminal
+
+	bool m_exe_writable;
+	bool m_exe_upper_layer;  ///< True if the executable file belongs to upper layer in overlayfs
+	bool m_exe_lower_layer;  ///< True if the executable file belongs to lower layer in overlayfs
+	bool m_exe_from_memfd;   ///< True if the executable is stored in fileless memory referenced by
+	                         ///< memfd
+	bool m_filtered_out;  ///< True if this thread is filtered out by the inspector filter from
+	                      ///< saving to a capture
 
 	size_t args_len() const;
 	size_t env_len() const;
